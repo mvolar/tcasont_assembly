@@ -1,0 +1,157 @@
+
+
+```{r}
+source("blast_functions.R")
+library(data.table)
+library(Biostrings)
+library(stringr)
+library(tidyverse)
+library(ggplot2)
+```
+
+
+# cast array size distribution
+
+```{r}
+
+
+#not public reads
+sat_cont_reads_cor <- blast_to_gff(q_name = "casts_19.fasta",s_name = "t_cast_20k.correctedReads.fasta",work_dir = "E:/t_cast_assembly/assembly_analysis/",name="blast_sat_reads")
+
+
+#fwrite(sat_cont_reads,"E:/t_cast_assembly/assembly_analysis/sat_cont_reads.tsv")
+
+names <- unique(ext_table[,variable])
+ext_fact <- c(250,250,250,250,250,1000,250,500,250,250)
+ext_fac_dt <- data.table(names,ext_fact)
+
+for (i in ext_fac_dt[,names])
+{
+  print(i)
+  ext_factor <- ext_fac_dt[names==i,ext_fact]
+  sat_copy <- copy(sat_cont_reads[feature==i])
+  sat_copy[,enE:=end+ext_factor]
+  result <- sat_copy %>% makeGRangesFromDataFrame() %>% reduce() %>% as.data.table()
+  result[,array:=i]
+  result[,width:=width-ext_factor]
+  if (i =="Cast1")
+  {
+    array_dt_reads <- result
+  } 
+  
+  if (i !="Cast1")
+  {
+    array_dt_reads <- rbind(array_dt_reads,result)
+  } 
+  
+}
+
+
+#if cast2 array has a cast2-prime within 170 bp beofre or after it is a Cast2-prime array
+cast2_array_dt <- array_dt_reads[array=="Cast2"]
+cast2_array_dt[,ar_id:=paste(seqnames,start,sep="_")]
+cast2_array_dt[,c("start", "end") := .(start-170, end+170)]
+
+
+cast_prime_array_dt <- array_dt_reads[array=="Cast2-prime"]
+cast_prime_array_dt[,ar_id:=NULL]
+
+
+setkey(cast2_array_dt,seqnames,start,end)
+setkey(cast_prime_array_dt,seqnames,start,end)
+
+ar_ids_with_cast_prime <- foverlaps(cast2_array_dt,cast_prime_array_dt) %>% na.omit() %>% .[,ar_id]
+
+new_arrays <- foverlaps(cast2_array_dt,cast_prime_array_dt) %>% na.omit()
+
+final_array_number <- new_arrays[,c("seqnames","start","end","i.end","ar_id","i.width","i.start")] %>%
+  .[i.start<start,start:=start-i.width] %>%
+  .[end>i.end,i.enE:=end] %>% 
+  .[end<i.end,i.enE:=i.end-170] %>% 
+  makeGRangesFromDataFrame(start.field = "start",
+                           end.field = "i.end",
+                           seqnames.field = "seqnames") %>%
+  reduce() %>%
+  as.data.table() 
+
+#if cast2-prime 
+
+array_dt_reads[array=="Cast2",ar_id:=paste(seqnames,start,sep="_")]
+
+
+array_dt_reads[array=="Cast2" & ar_id%notin%ar_ids_with_cast_prime,array:="Cast2_pure"]
+
+final_array_number[,array:="Cast2-mix"]
+
+array_dt_reads <- rbind(array_dt_reads[array!="Cast2" & array!="Cast2-prime"],final_array_number,fill=TRUE)
+
+
+
+
+array_dt_reads[width>330] %>% ggplot() + geom_histogram(aes(x=log(width,base=10),fill=array),bins=50) + facet_wrap(~array,scales="free") + scale_fill_npg()
+```
+
+#cast array profiles grid arrange
+```{r}
+
+a=0
+b=3000
+c=600
+labs <- paste0(seq(from=a,to=b/5,by=c/5))
+
+breaks<- seq(from=a/5,to=b,by=c)
+
+
+
+options(scipen=100000)
+p1 <- array_dt_reads[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000)] %>% ggplot() +
+  geom_histogram(aes(x=width,fill=array),bins=50) +
+  facet_wrap(~array,scales="free",ncol=2) +
+  scale_x_continuous(trans="log10") +
+   scale_fill_npg() +
+  theme_bw() 
+  #  scale_y_continuous(labels = mult_format(50))
+
+p2 <- array_dt[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000)]  %>% ggplot() +
+  geom_histogram(aes(x=width,fill=array),bins=50) +
+  facet_wrap(~array,scales="free",ncol=2) +
+  scale_x_continuous(trans="log10") +
+  scale_fill_npg() + 
+  theme_bw()
+
+grid.arrange(p1, p2, nrow = 1)
+
+```
+
+
+
+#LGX size comparison
+```{r}
+
+library(AICcmodavg)
+
+array_dt <- fread("./data/full_array_annot.gff") %>% setnames(gff_colnames)
+
+array_dt[,width:=abs(end-start)]
+
+array_dt %>% ggplot() + geom_boxplot(aes(x=seqnames,y=log(width1,base=10),fill="ba")) + theme_bw() + scale_fill_grey(start=0.7,end=0.7)
+
+array_dt %>% ggplot() + geom_boxplot(aes(x=seqnames,y=width1,fill="ba")) + theme_bw() + scale_fill_grey(start=0.7,end=0.7)
+
+
+t.test(array_dt[seqnames!="LGX",log(width1,base=10)],array_dt[seqnames=="LGX",log(width1,base=10)])
+
+
+wilcox.test(array_dt[width>350 & seqnames!="LGX",width1],array_dt[width>350 &seqnames=="LGX",width1])
+
+
+array_dt[,ar_width := end-start]
+
+l <- array_dt[,.N,by=seqnames][,array_per_mb := N*10^6/width]
+
+
+array_dt[,c("seqnames","width1")] %>% as.tibble() %>% tbl_summary(.,by=c("width1"))
+```
+
+
+

@@ -1,0 +1,102 @@
+
+
+```{r}
+library(data.table)
+library(Biostrings)
+library(stringr)
+library(tidyverse)
+```
+
+
+
+#BUSCO analyis 1,2,3
+
+
+```{r}
+
+
+file_names <- list.files("./scaffolding_results/busco_analysis/") %>% grep("busco_Tca",.,value=T)
+busco_table <- data.table()
+for (i in file_names)
+{
+  dt <- fread(paste0("./scaffolding_results/busco_analysis/",i),fill=TRUE,skip = 3)
+  name_id=str_remove(i,"busco_")
+  name_id=str_remove(name_id,"\\..+")
+  print(name_id)
+  dt[,name:=name_id]
+  busco_table=rbind(busco_table,dt)
+}
+ 
+
+
+busco_table[,.N,by=c("name","V2")] %>% dcast(...~name) %>% fwrite("./scaffolding_results/busco_analysis/busco_output_table.csv")
+
+```
+
+#repeat masker analysis
+
+```{r}
+rpts_polished_ONT <- fread("./data/TcasONT_repeats.gff")
+rpts_t_cast <- fread("./data/Tcas52_repeats.gff")
+
+
+rpts_polished_ONT[,source:="Tcast_ONT"]
+rpts_t_cast[,source:="Tcas5.2"]
+rpt_tot <- rbind(rpts_polished_ONT,rpts_t_cast)
+
+rpt_tot[,.N,by=c("V2","source")]
+
+rpt_tot[,group:=V3]
+rpt_tot[grep("DNA",V3),group:="DNA"]
+rpt_tot[grep("LINE",V3),group:="LINE"]
+rpt_tot[grep("RC",V3),group:="RC"]
+rpt_tot[grep("SINE",V3),group:="SINE"]
+rpt_tot[grep("LTR",V3),group:="LTR"]
+
+rpt_tot[,.N,by="group"]
+
+rpt_tot[,source:=factor(source,levels = c("polished","tcast5_2"))]
+lvl <- rpt_tot[,.N,by="group"][order(-N)][,group]
+rpt_tot[,group:=factor(group,levels = lvl)]
+
+rpt_tot[group!="Unkown" & group!="Retroposon" &group!="Retroposon?" &group!="Satellite" ] %>% ggplot() + geom_bar(aes(x=group,fill=source),position="dodge") + scale_fill_npg()
+
+rpt_tot[group!="Unkown" & group!="Retroposon" &group!="Retroposon?" &group!="Satellite"][,sum(V5-V4),by=c("group","source")] %>% ggplot() + geom_col(aes(x=group,y=V1,fill=source),position="dodge") + scale_fill_npg()
+
+rpt_tot[group!="Unkown" & group!="Retroposon" &group!="Retroposon?" &group!="Satellite" ][,.N,by=c("group","source")] %>% dcast(group~source) %>% fwrite("./repeat_masker_results/number_of_repeats.csv",sep="\t")
+
+rpt_tot[group!="Unkown" & group!="Retroposon" &group!="Retroposon?" &group!="Satellite" ][,sum(V5-V4),by=c("group","source")] %>% dcast(group~source) %>% fwrite("./repeat_masker_results/length_of_repeats.csv",sep="\t")
+
+
+```
+
+
+#gene analysis
+
+```{r}
+
+genes_tcast <- fread("./data/GCF_000002335.3_Tcas5.2_genomic.gff",skip=3,fill=T,sep="\t")
+genes_ont <- fread("./data/TcasONT_genes.gff3",skip=9,fill=T,sep="\t")
+
+genes_tcast <- merge(genes_tcast,name_links,by.x="V1",by.y="V7") %>% .[,V1:=V3.y]
+
+genes_ont <- genes_ont[,V1:=str_remove(V1,"_RagTag")] %>% merge(.,name_links,by.x="V1",by.y="V7") %>% .[,V1:=V3.y]
+
+merge(genes_ont[V3.x=="gene",.N,by=V1],genes_tcast[V3.x=="gene",.N,by=V1],by="V1") %>% fwrite("./data/gene_content_by_chromosome.tsv")
+
+
+```
+
+#chromosome lengths statistics
+```{r}
+
+tcast_52 <- readDNAStringSet("./data/tcast_full_assembly.fasta")[1:10]
+ONT_assembly <- readDNAStringSet("./data/TcasONT.fasta")[1:10]
+dt <- data.table(names=str_remove(names(tcast_52)," .+"),width=width(tcast_52),source="tcast52")
+dt_2 <- data.table(names=str_remove(names(ONT_assembly)," .+"),width=width(ONT_assembly),source="ONT")
+dt <- rbind(dt,dt_2)
+dt %>% dcast(V3~source,value.var = "width") %>% fwrite("./data/chr_lengths.tsv",sep="\t")
+
+```
+
+

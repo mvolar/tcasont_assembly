@@ -1,0 +1,148 @@
+
+
+
+# izvlačenje monomernih sekvenci castova s kromosoma
+```{r}
+library("dplyr")
+library("data.table")
+library("BSgenome")
+library("msa")
+library("rvcheck")
+library("ggtree")
+library("ape")
+library("metablastr")
+library(GenomicRanges)
+source("blast_functions.R")
+```
+
+
+
+#extracting monomers from assembly
+
+```{r}
+sat_cont_dt <- blast_to_gff(q_name = "casts_19.fasta",s_name = "TcasONT.fasta",
+                            work_dir = "./data/",name="blast_sat_assembly")
+
+chroms <- readDNAStringSet("./data/TcasONT.fasta")
+
+
+sat_cont_dt[,direction:="5-prime"]
+sat_cont_dt[s_start>s_end,direction:="3-prime"]
+sat_cont_dt[s_start>s_end, c("s_end", "s_start") := .(s_start, s_end)]
+sat_cont_dt <- sat_cont_dt[grep("LG",subject_id)] %>% .[grep("Cast",query_id)] 
+
+
+
+
+for (i in unique(sat_cont_dt[,query_id]))
+{
+sat_cont_dt_temp <- sat_cont_dt[query_id==i]
+
+i
+crom_monomers <- sat_cont_dt_temp %>% makeGRangesFromDataFrame(seqnames.field = "subject_id",start.field = "s_start",end.field = "s_end",keep.extra.columns = TRUE)
+
+seqs <- getSeq(chroms[1:10],crom_monomers)
+
+seqs[sat_cont_dt_temp$direction=="3-prime"]<-reverseComplement(seqs[sat_cont_dt_temp$direction=="3-prime"])
+names(seqs) <- sat_cont_dt_temp[,paste(query_id,subject_id,s_start,sep="_")]
+
+writeXStringSet(seqs,paste0("./data/phylogeny/",i,"_monomers.fasta"))
+}
+```
+
+
+
+#extracting junction regions
+```{r}
+dt_width <- data.table(names=names(chroms),width=width(chroms))
+arrays <- fread("E:/t_cast_assembly/assembly_analysis/full_array_annot.gff")
+arrays <- merge(arrays,dt_width,by.x="V1",by.y="names")
+
+arrays[,bef_start:=V4-499]
+arrays[,bef_end:=V4]
+arrays[,aff_start:=V5]
+arrays[,aff_end:=V5+499]
+
+arrays[bef_start<0,bef_start:=1]
+arrays[bef_end<0,bef_end:=1]
+
+arrays[aff_start>width,bef_start:=width]
+arrays[aff_end>width,aff_end:=width]
+
+gr_bef<- gr <- arrays %>% makeGRangesFromDataFrame(start.field = "bef_start",end.field = "bef_end",seqnames.field = "V1")
+seqs_bef <- getSeq(chroms,gr_bef) 
+names(seqs_bef) <- arrays[,paste0(V3,"_",V1,"_",V4)]
+
+gr_af<- gr <- arrays %>% makeGRangesFromDataFrame(start.field = "aff_start",end.field = "aff_end",seqnames.field = "V1")
+seqs_aff <- getSeq(chroms,gr_af) 
+names(seqs_aff) <- arrays[,paste0(V3,"_",V1,"_",V4)]
+
+
+
+
+
+for (i in unique(arrays[,V3]))
+{
+  tmp_seqsa_bef <- seqs_bef[grep(i,names(seqs_bef))] 
+  
+  tmp_seqsa_af <- seqs_aff[grep(i,names(seqs_aff))] 
+  
+  names(tmp_seqsa_bef) <- paste0(names(tmp_seqsa_bef),"_before")
+  
+  names(tmp_seqsa_af) <- paste0(names(tmp_seqsa_af),"_after")
+  
+  c(tmp_seqsa_bef,tmp_seqsa_af) %>% writeXStringSet(paste0("E:/t_cast_assembly/assembly_analysis/junction_regions_revamp/",i,".500bp.around_regions.fasta"))
+  
+}
+
+
+
+
+
+```
+
+
+#distance matrices and heatmaps
+```{r}
+# load package
+library(pheatmap)
+library("ComplexHeatmap")
+library(circlize)
+library("multipanelfigure")
+namevec <- c("Cast1","Cast2-mix","Cast2_pure","Cast3","Cast4","Cast5","Cast6","Cast7","Cast8","Cast9")
+
+
+myplots <- list()
+for(i in namevec)
+{
+dt <- fread(paste0("./data/matrices/",i,".matrix.csv")) %>% as.data.frame(row.names = "V1")
+dt$V1 <- NULL
+#dt=max(dt)-dt
+col_fun = colorRamp2(c(0,50,100), c("#1A5276","#F4ED7E", "#AD3212"))
+obj = paste0(i,"heatmap")
+h1=Heatmap(as.matrix(dt),show_column_names = FALSE,col = col_fun,column_title=i,name=" ",
+           heatmap_legend_param = list(
+        title = "similarity", at = c(0, 50, 100)
+    ))
+myplots[[i]] <- h1  
+png(paste0("./data/matrices/",i,"_heatmap.png"),width=1024,height=1024)
+draw(h1)
+dev.off()
+}
+getwd()
+figure1 <- multi_panel_figure(
+  width = 350, height = 350,
+  columns = 3, rows = 4,unit = "mm")
+
+
+for (i in 1:10)
+{
+h1 <- myplots[[i]] 
+figure1 %<>% fill_panel(h1)
+}
+
+figure1
+```
+
+
+

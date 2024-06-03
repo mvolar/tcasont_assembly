@@ -1,0 +1,94 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(ape)
+library(networkD3)
+library(dplyr)
+library(stringr)
+library(data.table)
+
+```
+
+
+```{r}
+chr_vec <- c("LG10","LG2","LG3","LG4","LG5","LG6","LG7","LG8","LG9","LGX")
+vec <- qualitative_hcl(10,c=100)
+
+cat(chr_vec,sep="\",\"")
+cat(vec,sep="\",\"")
+
+
+#change according to alignmet
+alignment_path = "./data/filtered_monomers/Cast2_aligned.fasta"
+
+var <- "Cast2"
+
+  
+
+  msa <- readDNAMultipleAlignment(alignment_path,format="fasta")
+  
+  matrix <- dist.dna(as.DNAbin(msa),model="F81",as.matrix=TRUE,pairwise.deletion=TRUE) %>% as.data.table()
+
+i = "Cast2"  
+
+
+matrix <- fread(paste0("./data/filtered_monomers/",i,".aligned.matrix.csv"))
+  
+
+names <- colnames(matrix)
+matrix <- cbind(names,matrix)
+colnames(matrix) <- str_remove(colnames(matrix),paste0("_",var))
+matrix[,names:=str_remove(names,paste0("_",var))]
+
+
+matrix[,name_id:=str_extract(names,"LG(\\d+|X)_\\d+")]
+
+dt <- melt(matrix,id.vars=c("names","name_id"))
+
+dt[,var_id:=str_extract(variable,"LG(\\d+|X)_\\d+")]
+
+
+ld_ar_dt <- dt[var_id!=name_id]
+
+#calculate mean distances between arrays
+ld_ar_dt[,mval:=mean(value,na.rm = TRUE),by=.(var_id,name_id)]
+
+#find the closest array for each array
+ld_ar_dt[,mmval:=min(mval,na.rm = TRUE),by=.(name_id)]
+
+tmp <- unique(ld_ar_dt[order(mval)][,.(var_id,name_id,mval)])[, head(.SD, 5), by=.(var_id)]
+
+tmp <- tmp[order(var_id)]
+
+g <- igraph::graph_from_data_frame(tmp,directed=F )
+
+
+p <- igraph_to_networkD3(g) 
+
+p$nodes$group = str_extract(p$nodes$name,"LG(\\d+|X)")
+#p$links$value = 1/p$links$value
+
+
+
+graph = forceNetwork(Links = p$links, Nodes = p$nodes, Source = 'source',
+             Target = 'target', NodeID = 'name', Group = 'group', Value = "value",
+             zoom = TRUE, linkDistance = 30,
+             linkWidth = 1,
+             arrows = FALSE,
+             charge=-50,
+             legend = TRUE, opacity = 0.8,
+             colourScale=JS('d3.scaleOrdinal(["#F05E84","#AE9000","#66A200","#00AE48","#00B39C","#00ABD7","#3892F9","#C16AF4","#EE50C9"],
+                ["LG10","LG3","LG4","LG5","LG6","LG7","LG8","LG9","LGX"]);'),
+             bounded = FALSE)
+
+
+htmlwidgets::saveWidget(graph,file = paste0(var,".html"))
+
+
+
+```
+

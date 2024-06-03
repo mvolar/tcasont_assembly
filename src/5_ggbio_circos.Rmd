@@ -1,0 +1,238 @@
+
+```{r}
+library(ComplexHeatmap)
+library(data.table)
+library(Biostrings)
+library(stringr)
+library(tidyverse)
+library(ggplot2)
+
+gff_colnames <- c("seqnames","source","type","start","end","score","strand","tag","name")
+
+array_dt <- fread("assembly_analysis/full_array_annot.gff")  %>% setnames(gff_colnames)
+
+
+```
+
+#ggbio distribution of cast elements on differen chromosomes
+
+```{r}
+library(ggbio)
+
+#namefix
+
+array_dt[,levels:=as.numeric(str_extract(type,"\\d"))]
+array_dt[,width:=end-start]
+
+
+lev <- c("LG2",  "LG3",  "LG4",  "LG5",  "LG6",  "LG7",  "LG8",  "LG9",  "LG10","LGX")
+array_dt[,seqnames:=factor(seqnames,levels=lev)]
+
+#tmp <- rbind(array_dt[(array!="Cast2-mix" & width>100) | (array=="Cast2-mix" & width > 1000)],array_dt_sat[width>350],fill=TRUE)
+array_dt[,levels:=as.numeric(str_extract(type,"\\d"))]
+
+
+autoplot(makeGRangesFromDataFrame(array_dt,keep.extra.columns = TRUE),layout="karyogram",aes(fill=type,color=type,
+         ymin = (levels - 1) * 10/9, ymax = levels * 10/9))  
+
+
+
+autoplot(makeGRangesFromDataFrame(array_dt,keep.extra.columns = TRUE),
+         layout="karyogram",
+         aes(fill=type,color=type),alpha=1) +
+  scale_fill_npg() +
+  scale_color_npg() + 
+  theme(panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.y = element_blank())
+```
+
+#circos 
+
+##funs
+
+```{r}
+windowize <- function (x,dt,len)
+{
+starts <- seq(from=dt[x,min],to=dt[x,max]-len,by=len)
+    ends <- seq(from=dt[x,min]+len,to=dt[x,max],by=len)
+        out_dt <- data.table(seqnames=dt[x,seqnames],start=starts,end=ends)
+return(out_dt)}
+
+
+
+#make windows from a data table start end function
+diw_fun <- function(dt_f,window=6,colvec=c("#4DBBD5B2","#DC0000B2" ),loged=FALSE,return_hits=FALSE,filter_hits=1000)  
+{
+dt <- copy(dt_f)  
+chr_range <- chr_range_dt
+
+i=window
+win_size = 10^(i)
+chr_range_glob_dt <- data.table()
+for (i in 1:nrow(chr_range))
+    
+{
+    chr_range_glob_dt <- rbind(chr_range_glob_dt,windowize(i,chr_range,win_size)) #ovo mijenjaj za druge prozore
+    
+    
+    
+}
+
+chr_range_glob_dt<<-chr_range_glob_dt
+
+windows <- makeGRangesFromDataFrame(chr_range_glob_dt,ignore.strand = TRUE)
+
+gr <- makeGRangesFromDataFrame(dt,keep.extra.columns = TRUE)
+
+hits_dt <- windows[subjectHits(findOverlaps(gr,windows))] %>% as.data.table(.) %>% .[,.N,by=c("seqnames","start","end")] %>% setnames(.,"N","hits")
+
+
+
+
+ cols <- cbind(colo=colorRampPalette(colvec)(max(hits_dt[,hits])),hits=1:max(hits_dt[,hits])) %>% 
+                 as.data.table %>%
+                           .[,hits:=as.integer(hits)]
+ 
+ if (loged == TRUE)
+{
+   hits_out <<-hits_dt
+
+   cols <- cbind(colo=colorRampPalette(colvec)(max(log(hits_dt[,hits],base=2))-min(log(hits_dt[,hits]))),
+                 hits=min(log(hits_dt[,hits])):max(log(hits_dt[,hits],base=2)))%>% 
+                as.data.table %>%
+                          .[,hits:=as.integer(hits)] 
+   cols_out <- cols
+   hits_dt[,hits:=round(sqrt(hits),0)]
+
+   bed_out <-  merge(hits_dt,cols) %>% as.data.frame()
+   
+ 
+ }
+if (return_hits==TRUE)
+{
+  bed <-  merge(hits_dt,cols)[hits>filter_hits]   %>% 
+    .[,hits:=NULL] %>%
+    as.data.table()
+  return(bed)
+} else {
+bed <-  merge(hits_dt,cols) %>% .[,hits:=NULL] %>% as.data.frame()
+return(bed)
+ }
+ 
+}
+
+```
+
+
+#plotting
+```{r}
+ONT_assembly <- readDNAStringSet("./data/TcasONT.fasta")[1:10]
+
+
+#loading genes
+genes_ont <- fread("./data/TcasONT_genes.gff",fill=T,sep="\t")
+genes_ont <- genes_ont[V3=="gene"]
+setnames(genes_ont,c("V1","V4","V5"),c("seqnames","start","end"))
+genes_ont[start>end, c("end", "start") := .(start, end)]
+genes_ont <- genes_ont[start<end,c("seqnames","start","end")]
+
+
+#loading repeat elements
+repeats <- fread("./data/TcasONT_repeats.gff",fill=TRUE) %>% 
+  merge(.,name_links,by.x="seqnames",by.y="V7") %>% .[,seqnames:=V3] %>% .[,V3:=NULL]
+```
+
+
+```{r}
+
+#init range dt
+chr_range_dt <- data.table(seqnames=str_remove(names(ONT_assembly),"_RagTag.+"),min=1,max=width(ONT_assembly))   %>%  merge(.,name_links,by.x="seqnames",by.y="V7") %>%  .[,seqnames:=V3] %>% .[,V3:=NULL]
+
+#sattetlies are ready
+
+new_ch <- cbind("Empty_space",1,20000000) %>% data.table()
+
+chr_range_dt_2 <- rbind(chr_range_dt,new_ch,use.names=FALSE)
+
+
+chr_range_dt_2[,max:=as.double(max)]
+chr_range_dt_2[,min:=as.double(min)]
+
+
+col_fun = colorRamp2(c(0, 1), c("#4DBBD5B2","#DC0000B2"))
+lgd = Legend(col_fun = col_fun, title = "Relative abundancy",at=c(0,1),labels = c("Low","High"))
+grid.rect() 
+draw(lgd, x = unit(1, "cm"), y = unit(1, "cm"), just = c("left", "bottom"))
+popViewport()
+```
+
+
+```{r}
+TCAST_dt <- sat_cont_dt[grep("TCAST",feature)] %>% .[,c("seqnames","start","end")] #%>% .[grep("NC",seqnames)]
+TCAST_dt[,seqnames:=str_remove(seqnames,"_RagTag")]
+#TCAST_dt <- merge(TCAST_dt,name_links,by.x="seqnames",by.y="V7") %>% .[,seqnames:=V3] %>% .[,V3:=NULL] 
+TCAST_dt <- TCAST_dt[grep("LG",seqnames)]
+
+
+
+cast_dt <- sat_cont_dt[grep("Cast",feature)][feature!="Cast7"] %>% .[,c("seqnames","start","end")] #%>% .[grep("NC",seqnames)]
+cast_dt[,seqnames:=str_remove(seqnames,"_RagTag")]
+#cast_dt <- merge(cast_dt,name_links,by.x="seqnames",by.y="V7") %>% .[,seqnames:=V3] %>% .[,V3:=NULL] 
+cast_dt <- cast_dt[grep("LG",seqnames)]
+
+
+lgd_LINE = Legend(at = c(-2,2),col_fun = )
+
+draw(lgd, x = unit(1, "cm"), y = unit(1, "cm"), just = c("left", "bottom"))
+```
+
+
+```{r}
+
+
+colorRampPalette(colvec)(10)
+
+
+
+lev <- c("LG2",  "LG3",  "LG4",  "LG5",  "LG6",  "LG7",  "LG8",  "LG9",  "LG10","LGX")
+array_dt[,seqnames:=factor(seqnames,levels=lev)]
+
+
+circos.par("track.height"=0.1)
+circos.genomicInitialize(chr_range_dt_2)
+circos.genomicTrack(diw_fun(genes_ont,window = 6), stack = TRUE, 
+    panel.fun = function(region, value, ...) {
+        i = getI(...)
+        circos.genomicRect(region, value, ytop = i + 0.6, ybottom = i - 0.6,
+            col = value$colo,border = value$colo, ...)
+})
+circos.genomicTrack(diw_fun(repeats[class!="Simple_repeat" & class!="Low_complexity"],loged = FALSE,window = 6), stack = TRUE, 
+    panel.fun = function(region, value, ...) {
+        i = getI(...)
+        circos.genomicRect(region, value, ytop = i + 0.6, ybottom = i - 0.6,
+            col = value$colo,border = value$colo,  ...)
+})
+circos.genomicTrack(diw_fun(array_dt,window = 6), stack = TRUE, 
+    panel.fun = function(region, value, ...) {
+        i = getI(...)
+        circos.genomicRect(region, value, ytop = i + 0.6, ybottom = i - 0.6,
+            col = value$colo,border = value$colo,...)
+})
+hits_out
+
+
+v1 <- diw_fun(genes_ont,window = 5,return_hits = FALSE) %>% .[order(seqnames,start)] 
+v2 <- diw_fun(array_dt,window = 6.5,return_hits = FALSE) %>% .[order(seqnames,start)] 
+
+v1[,merge_id:=paste(seqnames,start,sep="_")]
+v2[,merge_id:=paste(seqnames,start,sep="_")]
+
+v1 <- merge(v1,v2,by="merge_id")
+
+v1 %>% ggplot() + geom_point(aes(x=hits.x,y=hits.y))
+
+
+
+
+```

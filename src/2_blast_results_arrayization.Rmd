@@ -1,0 +1,316 @@
+
+```{r}
+source("blast_functions.R")
+library(data.table)
+library(Biostrings)
+library(stringr)
+library(tidyverse)
+library(ggplot2)
+```
+
+
+ 
+# satelite content, 2d density plot analyis for filtering parameters
+```{r}
+
+sat_cont_dt <- blast_to_raw(q_name = "casts_19.fasta",s_name = "TcasONT.fasta",work_dir = "./data/",name="blast_sat_assembly")
+
+tmp <- sat_cont_dt[grep("Cast",query_id),.N,by=c("query_id","qcovhsp","perc_identity")] %>% .[,perc_identity:=round(perc_identity)]
+
+p <- ggplot(tmp[-grep("Cast2-prime",query_id)], aes(qcovhsp, perc_identity)) +
+  geom_density_2d_filled(contour_var = "ndensity",bins=50) +
+  facet_wrap(vars(query_id))+
+  theme_bw() +  
+  scale_fill_discrete_divergingx()+
+  ylab("Percentage identity (%)") +
+  xlab("Query coverage (%)") +
+  theme(legend.position = "none")
+
+```
+
+
+
+#finding the cast2 array size 
+```{r}
+ext_table <- data.table(name=unique(sat_cont_dt[grep("Cast",feature),feature])) %>% dcast(...~name)
+vec <- seq(from=100,to=2000,by=10)
+ext_table <- rbind(ext_table,vec,fill=T) %>% .[-1]
+ext_table[,.:=NULL]
+
+ext_table <- ext_table %>% melt(id.vars="x")
+
+
+fun <- function(ext_factor,array="Cast1")
+{
+  sat_copy <- copy(sat_cont_dt[feature==array])
+  sat_copy[,enE:=end+ext_factor]
+  result <- sat_copy %>% makeGRangesFromDataFrame() %>% reduce() %>% as.data.table() %>% .[,mean(width-ext_factor)]
+  return(result)
+}
+
+
+
+for(i in unique(ext_table[,variable]))
+{
+ext_table[variable==i,value:=sapply(ext_table[variable==i,x],FUN = fun,array=i)]
+}
+
+ext_table[,value:=as.double(value)]
+ext_table[,value_scaleE:=value/max(value),by=variable]
+ext_table[,cumsum_value:=cumsum(value_scaled),by=variable]
+sat_cont_dt
+
+p <- ext_table %>% ggplot() +
+  geom_line(aes(x=x,y=value_scaled,color=variable)) +
+  scale_color_npg() + facet_wrap(~variable) +
+  theme_bw()
+
+```
+
+
+
+#creating all arrays file
+```{r}
+
+
+#setnames(sat_cont_dt,"query_id","feature")
+names <- unique(ext_table[,variable])
+ext_fact <- c(250,250,250,250,250,1000,250,500,250,250)
+ext_fac_dt <- data.table(names,ext_fact)
+
+
+for (i in ext_fac_dt[,names])
+{
+  print(i)
+  ext_factor <- ext_fac_dt[names==i,ext_fact]
+  sat_copy <- copy(sat_cont_dt[feature==i])
+  sat_copy[,enE:=end+ext_factor]
+  result <- sat_copy %>% makeGRangesFromDataFrame() %>% reduce() %>% as.data.table()
+  result[,array:=i]
+  #turn off for stats
+  result[,width:=width-ext_factor]
+  result[,enE:=end-ext_factor]
+  if (i =="Cast1")
+  {
+    array_dt <- result
+  } 
+  
+  if (i !="Cast1")
+  {
+    array_dt <- rbind(array_dt,result)
+  } 
+  
+}
+
+#if cast2 array has a cast2-prime within 170 bp beofre or after it is a Cast2-prime array
+cast2_array_dt <- array_dt[array=="Cast2"]
+cast2_array_dt[,ar_id:=paste(seqnames,start,sep="_")]
+cast2_array_dt[,c("start", "end") := .(start-170, end+170)]
+
+
+cast_prime_array_dt <- array_dt[array=="Cast2-prime"]
+try(cast_prime_array_dt[,ar_id:=NULL])
+
+
+setkey(cast2_array_dt,seqnames,start,end)
+setkey(cast_prime_array_dt,seqnames,start,end)
+
+ar_ids_with_cast_prime <- foverlaps(cast2_array_dt,cast_prime_array_dt) %>% na.omit() %>% .[,ar_id]
+
+new_arrays <- foverlaps(cast2_array_dt,cast_prime_array_dt) %>% na.omit()
+
+final_array_number <- new_arrays[,c("seqnames","start","end","i.end","ar_id","i.width","i.start")] %>%
+  .[i.start<start,start:=start-i.width] %>%
+  .[end>i.end,i.enE:=end] %>% 
+  .[end<i.end,i.enE:=i.end-170] %>% 
+  makeGRangesFromDataFrame(start.field = "start",
+                           end.field = "i.end",
+                           seqnames.field = "seqnames") %>%
+  reduce() %>%
+  as.data.table() 
+
+#if cast2-prime 
+
+array_dt[array=="Cast2",ar_id:=paste(seqnames,start,sep="_")]
+
+
+array_dt[array=="Cast2" & ar_id%notin%ar_ids_with_cast_prime,array:="Cast2_pure"]
+
+final_array_number[,array:="Cast2-mix"]
+
+array_dt <- rbind(array_dt[array!="Cast2" & array!="Cast2-prime"],final_array_number,fill=TRUE)
+
+#gff save for arrays
+{
+gff_temp <- copy(array_dt_cast2_fixed)
+
+gff_temp[,ar_id:=NULL]
+
+
+gff_temp[,width:=NULL]
+
+
+gff_temp[,stranE:=NULL]
+
+gff_temp[,score:=1000]
+
+colnames(gff_temp) <- c("seqnames","start","end","feature","score")
+
+gff_temp[,source:="Rblast"]
+
+gff_temp[,stranE:="+"]
+
+gff_temp[,frame:="."]
+
+gff_temp[,group:=feature]
+
+setcolorder(gff_temp,c("seqnames","source","feature","start","end","score","strand","frame","group"))
+
+fwrite(gff_temp, file = "./data/full_array_annot.gff3", row.names=FALSE, sep="\t",quote=FALSE,col.names = FALSE)
+}
+
+
+mean <- array_dt[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),mean(width),by=array][,V1]
+median <- array_dt[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),median(width),by=array][,V1]
+number <- array_dt[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),.N,by=array][,N]
+total_len <- array_dt[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),sum(width),by=array][,V1]
+names <- array_dt[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),.N,by=array][,array]
+max <- array_dt[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),max(width),by=array][,V1]
+
+data.table(names,number,mean,median,max,total_len) %>% .[order(names)]
+
+array_dt[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000)]
+
+casts <- readDNAStringSet("./data/casts_19.fasta")
+
+dt <- data.table(width(casts),names(casts)) %>% .[order(V2)]
+
+dt
+
+
+```
+
+
+
+#blasting for sattelite on assembly, new and old
+
+```{r}
+sat_cont_dt <- blast_to_gff(q_name = "casts_19.fasta",s_name = "TcasONT.fasta",work_dir = "./data/",name="blast_sat_assembly")
+
+
+
+sat_cont_trim_reads <- blast_to_gff(q_name = "casts_19.fasta",s_name = "15x_corrected_coverage.fasta",work_dir = "./data/",name="blast_sat_trim_15x_assembly")
+
+
+sat_cont_15x_reads <- blast_to_gff(q_name = "casts_19.fasta",s_name = "15x_corrected_coverage.fasta",work_dir = "E:/t_cast_assembly/assembly_analysis/",name="blast_sat_trim_15x_assembly")
+
+sat_cont_dt[grep("NC",seqnames),.N,by=feature][order(feature)]
+sat_cont_52_dt[grep("NC",seqnames),.N,by=feature][order(feature)]
+sat_cont_reads_cor[,.N,by=feature][order(feature)]
+sat_cont_trim_reads[,.N,by=feature][order(feature)]
+
+sat_cont_trim_reads[,.N,by=feature][order(feature)]
+
+sat_cont_15x_reads[,sum(end-start)*100/y,by=feature][order(feature)]
+
+
+y <- sum(width(reads_used))
+
+```
+
+
+
+
+
+#comparison with tcas5.2
+```{r}
+sat_cont_52_dt <- blast_to_gff(q_name = "casts_19.fasta",s_name = "tcast_full_assembly.fasta",work_dir = "./data/",name="blast_sat_assembly_52")
+
+
+
+names <- unique(ext_table[,variable])
+ext_fact <- c(250,250,250,250,250,1000,250,500,250,250)
+ext_fac_dt <- data.table(names,ext_fact)
+
+
+for (i in ext_fac_dt[,names])
+{
+  print(i)
+  ext_factor <- ext_fac_dt[names==i,ext_fact]
+  sat_copy <- copy(sat_cont_52_dt[feature==i])
+  sat_copy[,enE:=end+ext_factor]
+  result <- sat_copy %>% makeGRangesFromDataFrame() %>% reduce() %>% as.data.table()
+  result[,array:=i]
+  if (i =="Cast1")
+  {
+    array_dt_52 <- result
+  } 
+  
+  if (i !="Cast1")
+  {
+    array_dt_52 <- rbind(array_dt_52,result)
+  } 
+  
+}
+
+
+
+array_dt_52 <- array_dt_52[grep("NC",seqnames)]
+
+
+#if cast2 array has a cast2-prime within 170 bp beofre or after it is a Cast2-prime array
+cast2_array_dt <- array_dt_52[array=="Cast2"]
+cast2_array_dt[,ar_id:=paste(seqnames,start,sep="_")]
+cast2_array_dt[,c("start", "end") := .(start-170, end+170)]
+
+
+cast_prime_array_dt <- array_dt_52[array=="Cast2-prime"]
+cast_prime_array_dt[,ar_id:=NULL]
+
+
+setkey(cast2_array_dt,seqnames,start,end)
+setkey(cast_prime_array_dt,seqnames,start,end)
+
+ar_ids_with_cast_prime <- foverlaps(cast2_array_dt,cast_prime_array_dt) %>% na.omit() %>% .[,ar_id]
+
+new_arrays <- foverlaps(cast2_array_dt,cast_prime_array_dt) %>% na.omit()
+
+final_array_number <- new_arrays[,c("seqnames","start","end","i.end","ar_id","i.width","i.start")] %>%
+  .[i.start<start,start:=start-i.width] %>%
+  .[end>i.end,i.enE:=end] %>% 
+  .[end<i.end,i.enE:=i.end-170] %>% 
+  makeGRangesFromDataFrame(start.field = "start",
+                           end.field = "i.end",
+                           seqnames.field = "seqnames") %>%
+  reduce() %>%
+  as.data.table() 
+
+#if cast2-prime 
+
+array_dt_52[array=="Cast2",ar_id:=paste(seqnames,start,sep="_")]
+
+
+array_dt_52[array=="Cast2" & ar_id%notin%ar_ids_with_cast_prime,array:="Cast2_pure"]
+
+final_array_number[,array:="Cast2-mix"]
+
+array_dt_52 <- rbind(array_dt_52[array!="Cast2" & array!="Cast2-prime"],final_array_number,fill=TRUE)
+
+
+
+
+
+mean <- array_dt_52[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),mean(width),by=array][,V1]
+median <- array_dt_52[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),median(width),by=array][,V1]
+number <- array_dt_52[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),.N,by=array][,N]
+total_len <- array_dt_52[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),sum(width),by=array][,V1]
+names <- array_dt_52[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),.N,by=array][,array]
+max <- array_dt_52[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),max(width),by=array][,V1]
+
+data.table(names,number,mean,median,max,total_len) %>% .[order(names)]
+
+
+sat_cont_52_dt
+sat_cont_dt
+array_dt
+```

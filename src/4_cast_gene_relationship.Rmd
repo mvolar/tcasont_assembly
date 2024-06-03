@@ -1,0 +1,421 @@
+
+```{r}
+source("blast_functions.R")
+library(data.table)
+library(Biostrings)
+library(stringr)
+library(tidyverse)
+library(ggplot2)
+```
+
+
+#finding genes in cast vicinity
+
+```{r}
+chroms <- readDNAStringSet("./data/TcasONT.fasta")
+dt_width <- data.table(names=names(chroms),width=width(chroms))
+arrays <- fread("./data/full_array_annot.gff")
+arrays <- merge(arrays,dt_width,by.x="V1",by.y="names")
+
+array_dt <- arrays[,c(1,3,4,5,10)]
+try(setnames(array_dt,c("V1","V3","V4","V5"),c("seqnames","array","start","end")))
+genes_ont <- fread("./data/TcasONT_genes.gff",skip=0,fill=T,sep="\t")
+genes_ont <- genes_ont[V3=="exon"]
+setnames(genes_ont,c("V1","V4","V5"),c("seqnames","start","end"))
+genes_ont[start>end, c("end", "start") := .(start, end)]
+array_dt[,ar_id:=paste(array,seqnames,as.character(start),sep="_")]
+array_dt[,width:=abs(end-start)]
+genedt <- genes_ont
+cont_fac <- 50000
+bin=50
+try(setnames(genedt,c("seqnames","start","end"),c("V1","V4","V5")))
+#######bef array
+glob_tmp <- copy(array_dt[width>330])
+glob_tmp[,c("start", "end") := .(start-cont_fac, start)]
+
+glob_tmp[,ar_size:=as.character(cut(glob_tmp$width, 
+                                     breaks=c(0,1000,10000,50000)#,
+                                 #labels=c("1Q","2Q","3Q"), include.lowest=TRUE
+                                 ))
+          ]
+setkey(glob_tmp,seqnames,start,end)
+setkey(genedt,V1,V4,V5)
+overlapdt <- foverlaps(genedt,glob_tmp) 
+overlapdt[,c("V5","start"):=.(V5-start,start-start)]
+overlapdt <- na.omit(overlapdt)
+
+overlapdt[,range:=as.integer(cut(overlapdt$V5, 
+                      breaks=bin,
+                      labels=as.numeric( sub("\\((.+),.*", "\\1", levels(cut(overlapdt[,V5], bin))) ),
+                      ))]
+
+# overlapdt[,ar_quant:=as.character(cut(overlapdt$width,
+#                                      breaks=c(quantile(overlapdt$width,
+#                                                        probs = seq(0, 1, by = 0.25))
+#                                               ),
+#                                  labels=c("1Q","2Q","3Q","4Q"), include.lowest=TRUE
+#                                  ))
+#           ]
+
+
+ol_bef <- overlapdt %>% .[,.N,by=c("range","array","ar_size","width","ar_id")] 
+ol_bef[,range:=-range*(cont_fac/bin)]
+
+##FOR GEOM DENSITY
+overlapdt[,range:=-range*(cont_fac/bin)]
+ol_bef <- overlapdt
+######################
+#####after array
+glob_tmp <- copy(array_dt[width>330])
+glob_tmp[,c("start", "end") := .(end, end + cont_fac)]
+setkey(glob_tmp,seqnames,start,end)
+setkey(genedt,V1,V4,V5)
+glob_tmp[,ar_size:=as.character(cut(glob_tmp$width, 
+                                     breaks=c(0,1000,10000,50000)#,
+                                 #labels=c("1Q","2Q","3Q"), include.lowest=TRUE
+                                 ))
+          ]
+overlapdt <- foverlaps(genedt,glob_tmp) 
+overlapdt[,c("V4","end"):=.(V4-end,end-end)]
+overlapdt <- na.omit(overlapdt)
+overlapdt[,range:=as.integer(cut(overlapdt$V4, 
+                      breaks=bin,
+                      labels=as.numeric( sub("\\((.+),.*", "\\1", levels(cut(overlapdt[,V4], bin))) ),
+                      ))]
+
+                      #labels=as.numeric( sub("\\((.+),.*", "\\1", levels(cut(overlapdt[,width], 5))) ),
+
+ol_af <- overlapdt %>% .[,.N,by=c("range","array","ar_size","width","ar_id")] 
+ol_af[,range:=range*(cont_fac/bin)]
+#geom_density
+overlapdt[,range:=range*(cont_fac/bin)]
+ol_af <- overlapdt
+
+plot_cast_dt <- rbind(ol_bef,ol_af)
+
+limp <- array_dt[width>330,.N,by=array] 
+setnames(limp,"N","total_N")
+
+plot_cast_dt <- merge(plot_cast_dt,limp,by="array")
+
+plot_cast_dt[,array:=str_replace(array,"Cast2-mix","Cast2'")]
+
+plot_cast_dt[,array:=str_replace(array,"Cast2_pure","Cast2")]
+
+
+plot_cast_dt[,.N,by=c("array","ar_id","total_N","ar_size","width")]  %>%  
+  .[,N_scale:=N] %>%   .[] %>% 
+  ggplot() + 
+  geom_boxplot(aes(x=array,fill=array,y=N_scale)) + 
+  geom_hline(yintercept = 56,color="black",alpha=0.9,linetype = "dashed")+
+  geom_hline(yintercept = 15,color="red",alpha=0.6,linetype = "dashed") +
+  geom_hline(yintercept = 127,color="red",alpha=0.6,linetype = "dashed") +
+  theme_bw() +
+  scale_fill_npg() +
+  theme(legend.position = "none") +
+  ylab("N genes") + 
+  xlab("")
+
+
+results <- aov(data=plot_cast_dt[array=="Cast5" & ar_size=="(1e+04,5e+04]",.N,by=.(range,array)][,range:=as.factor(range)],formula = N~range)
+res <- TukeyHSD(results)
+grep("Cast5",res$`array:range`)
+
+
+dt <- data.table(res$`array:range`,keep.rownames = TRUE)
+
+```
+
+
+
+
+
+# scaling
+```{r}
+limp <- array_dt[width>330,.N,by=array] 
+setnames(limp,"N","total_N")
+
+plot_cast_dt <- merge(plot_cast_dt,limp,by="array")
+
+
+plot_cast_dt[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),sum(N),by=c("range","ar_size","array")] %>%
+  ggplot() +
+  geom_line(aes(x=range,y=V1,color=ar_size)) +
+  facet_wrap(~array) +
+    theme_bw() +
+  scale_color_npg() +
+   geom_vline(xintercept = 0,color="red",alpha=0.3,linetype = "dashed") +
+  scale_x_continuous(labels = mult_format(10000))
+
+
+
+plot_cast_dt[(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000),sum(N),by=c("range","ar_size","array","total_N")] %>%
+  .[,V1:=V1/total_N] %>% 
+  ggplot() +
+  geom_line(aes(x=range,y=V1,color=ar_size)) +
+  facet_wrap(~array) +
+    theme_bw() +
+  scale_color_npg() +
+   geom_vline(xintercept = 0,color="red",alpha=0.3,linetype = "dashed") +
+  scale_x_continuous(labels = mult_format(10000))
+
+
+plot_cast_dt %>% ggplot() +
+  geom_histogram(aes(x=N),bins=100) +
+  facet_wrap(~array,scales="free") + xlab("")
+
+
+
+#(array!="Cast2-mix" & width>530) | (array=="Cast2-mix" & width > 2000)
+plot_cast_dt[,array:=str_replace(array,"Cast2-mix","Cast2'")]
+
+plot_cast_dt[,array:=str_replace(array,"Cast2_pure","Cast2")]
+
+plot_cast_dt[,.N,by=c("array","ar_id","total_N","ar_size","width")]  %>%  
+  .[,N_scale:=N] %>%   .[] %>% 
+  ggplot() + 
+  geom_violin(aes(x=array,fill=array,y=N_scale)) + 
+  geom_hline(yintercept = 56,color="black",alpha=0.9,linetype = "dashed")+
+  geom_hline(yintercept = 15,color="red",alpha=0.6,linetype = "dashed") +
+  geom_hline(yintercept = 127,color="red",alpha=0.6,linetype = "dashed") +
+  theme_bw() +
+  scale_fill_npg() 
+
+plot_cast_dt %>%   .[] %>% 
+  ggplot() + 
+  geom_density2d_filled(aes(x=width,y=width)) + 
+  theme_bw() +
+  scale_fill_npg() 
+
+
+```
+#relationship with other repeat elements
+
+```{r}
+
+chroms <- readDNAStringSet("./data/TcasONT.fasta")
+dt_width <- data.table(names=names(chroms),width=width(chroms))
+arrays <- fread("./data/full_array_annot.gff")
+arrays <- merge(arrays,dt_width,by.x="V1",by.y="names")
+
+array_dt <- arrays[,c(1,3,4,5,10)]
+try(setnames(array_dt,c("V1","V3","V4","V5"),c("seqnames","array","start","end")))
+genes_ont <- fread("./data/TcasONT_repeats.gff",skip=0,fill=T,sep="\t")
+genes_ont <- genes_ont[V3!="Simple_repeat" & V3!="Low_complexity"]
+setnames(genes_ont,c("V1","V4","V5"),c("seqnames","start","end"))
+genes_ont[start>end, c("end", "start") := .(start, end)]
+array_dt[,ar_id:=paste(array,seqnames,as.character(start),sep="_")]
+array_dt[,width:=abs(end-start)]
+genedt <- genes_ont
+cont_fac <- 50000
+bin=10
+try(setnames(genedt,c("seqnames","start","end"),c("V1","V4","V5")))
+#######bef array
+glob_tmp <- copy(array_dt[width>330])
+glob_tmp[,c("start", "end") := .(start-cont_fac, start)]
+
+glob_tmp[,ar_size:=as.character(cut(glob_tmp$width, 
+                                     breaks=c(0,1000,10000,50000)#,
+                                 #labels=c("1Q","2Q","3Q"), include.lowest=TRUE
+                                 ))
+          ]
+setkey(glob_tmp,seqnames,start,end)
+setkey(genedt,V1,V4,V5)
+overlapdt <- foverlaps(genedt,glob_tmp) 
+overlapdt[,c("V5","start"):=.(V5-start,start-start)]
+overlapdt <- na.omit(overlapdt)
+
+overlapdt[,range:=as.integer(cut(overlapdt$V5, 
+                      breaks=bin,
+                      labels=as.numeric( sub("\\((.+),.*", "\\1", levels(cut(overlapdt[,V5], bin))) ),
+                      ))]
+
+# overlapdt[,ar_quant:=as.character(cut(overlapdt$width,
+#                                      breaks=c(quantile(overlapdt$width,
+#                                                        probs = seq(0, 1, by = 0.25))
+#                                               ),
+#                                  labels=c("1Q","2Q","3Q","4Q"), include.lowest=TRUE
+#                                  ))
+#           ]
+
+
+ol_bef <- overlapdt %>% .[,.N,by=c("range","array","ar_size","width","ar_id")] 
+ol_bef[,range:=-range*(cont_fac/bin)]
+
+##FOR GEOM DENSITY
+overlapdt[,range:=-range*(cont_fac/bin)]
+ol_bef <- overlapdt
+######################
+#####after array
+glob_tmp <- copy(array_dt[width>330])
+glob_tmp[,c("start", "end") := .(end, end + cont_fac)]
+setkey(glob_tmp,seqnames,start,end)
+setkey(genedt,V1,V4,V5)
+glob_tmp[,ar_size:=as.character(cut(glob_tmp$width, 
+                                     breaks=c(0,1000,10000,50000)#,
+                                 #labels=c("1Q","2Q","3Q"), include.lowest=TRUE
+                                 ))
+          ]
+overlapdt <- foverlaps(genedt,glob_tmp) 
+overlapdt[,c("V4","end"):=.(V4-end,end-end)]
+overlapdt <- na.omit(overlapdt)
+overlapdt[,range:=as.integer(cut(overlapdt$V4, 
+                      breaks=bin,
+                      labels=as.numeric( sub("\\((.+),.*", "\\1", levels(cut(overlapdt[,V4], bin))) ),
+                      ))]
+
+                      #labels=as.numeric( sub("\\((.+),.*", "\\1", levels(cut(overlapdt[,width], 5))) ),
+
+ol_af <- overlapdt %>% .[,.N,by=c("range","array","ar_size","width","ar_id")] 
+ol_af[,range:=range*(cont_fac/bin)]
+#geom_density
+overlapdt[,range:=range*(cont_fac/bin)]
+ol_af <- overlapdt
+
+plot_cast_dt <- rbind(ol_bef,ol_af) 
+
+limp <- array_dt[width>330,.N,by=array] 
+setnames(limp,"N","total_N")
+
+plot_cast_dt <- merge(plot_cast_dt,limp,by="array")
+
+
+plot_cast_dt[,array:=str_replace(array,"Cast2-mix","Cast2'")]
+
+plot_cast_dt[,array:=str_replace(array,"Cast2_pure","Cast2")]
+
+
+genes_ont[,cutw:=cut_width(V4,width=100000,labels=F)]
+
+genes_ont[,.N,by=cutw][,summary(N)]
+
+genes_ont[,.N,by=cutw] %>% ggplot() + geom_histogram(aes(x=N))
+
+
+plot_cast_dt[ V9!="CR1-3_TCa" & V9!="Gypsy-18_PBa-I"][,.N,by=c("array","ar_id","total_N","ar_size","width")]   %>% 
+  ggplot() + 
+  geom_boxplot(aes(x=array,fill=array,y=N)) + 
+  theme_bw() +
+  scale_fill_npg() +
+  geom_hline(yintercept = 101,color="black",alpha=0.9,linetype = "dashed")+
+  geom_hline(yintercept = 35,color="red",alpha=0.6,linetype = "dashed") +
+  geom_hline(yintercept = 233,color="red",alpha=0.6,linetype = "dashed") +
+  theme(legend.position = "none") + 
+  xlab("") +
+  ylab("N TE")
+
+
+tmp <- genes_ont[,.N,by=cutw]
+tmp[,array:="Genome"]
+
+aov_dt <- rbind(plot_cast_dt[,.N,by=c("array","ar_id","total_N","ar_size","width")][,.(array,N)],tmp[,.(array,N)])
+aov_dt[,is_genome:="No"]
+aov_dt[grep("Cast",array),is_genome:="Yes"]
+
+
+results <- aov(N~array,data=aov_dt)
+TukeyHSD(results)
+
+plot_cast_dt[,.N,by=c("range","array","total_N","ar_size","ar_id")] %>%
+  .[,mean(N),by=c("range","array","total_N","ar_size")] %>% 
+  ggplot() +
+  geom_line(aes(x=range,y=V1,color=ar_size)) + 
+  facet_wrap(~array,scales="free_y") + 
+  theme_bw()
+
+
+```
+
+
+#relationship of ar_size and N_genes, ggridges
+```{r}
+library(ggridges)
+library(colorspace)
+
+options(scipen = 10^6)
+vec <- plot_cast_dt[,.N,by=ar_id][N>30,ar_id]
+ggplot(plot_cast_dt[ar_id%in%vec]) + 
+  geom_density_ridges(aes(x=log(width,base=10),y=array),scale=1)  
+
+a = ggplot(plot_cast_dt[width>500],aes(height = stat(density))) + 
+  theme_minimal() + 
+  geom_density_ridges(aes(x=width,y=array,fill=array),scale=2,alpha=0.5)  +
+  scale_x_continuous(trans="log10",limits=c(500,100000)) +
+  scale_fill_discrete_diverging() + 
+  theme(legend.position = "none")
+
+b = ggplot() + 
+  geom_density_ridges(data=array_dt[width>500],aes(x=width,y=array,fill=array),scale=2,alpha=0.5)  +
+  theme_minimal() +
+  ylab("") + 
+  scale_x_continuous(trans="log10",limits=c(500,100000)) +
+  scale_fill_discrete_diverging() + 
+  theme(legend.position = "none",
+        axis.text.y = element_blank()) 
+  
+  
+
+plot_cast_dt_densities <- plot_cast_dt %>%
+  group_by(array) %>%
+  group_modify(~ ggplot2:::compute_density(.x$width, NULL)) %>%
+  rename(width = x)
+
+ggplot(plot_cast_dt[width>500], aes(x = width, y = array, height = stat(density))) + 
+  geom_density_ridges(stat = "binline",bins=20,scale=1) +
+    theme_minimal() +
+  ylab("") + 
+  scale_x_continuous(trans="log10",limits=c(500,100000)) +
+  scale_fill_discrete_diverging() + 
+  theme(legend.position = "none") 
+
+ggplot(plot_cast_dt_densities, aes(x = width, y = array, height = density)) + 
+  geom_density_ridges(stat = "identity") +
+    theme_minimal() +
+  ylab("") + 
+  scale_x_continuous(trans="log10",limits=c(1,100000)) +
+  scale_fill_discrete_diverging() + 
+  theme(legend.position = "none") 
+
+
+as.data.table(plot_cast_dt_densities)[array=="Cast5"]
+
+array_dt[width>500,.N,by=array]
+
+
+
+dt <- plot_cast_dt[width>500,.N,by=c("array","width")] %>% .[,width_bin:=cut_width(width,width=1000)]
+
+plot_cast_dt[,width_bin:=cut_width(width,width=1000)]
+
+
+plot_cast_dt[,.N,by=ar_id] %>% ggplot() + geom_histogram(aes(N))
+
+plot_cast_dt[,.N,by=ar_id][,summary(N)]
+
+plot_cast_dt[,.N,by=c("ar_id","array")] %>% ggplot() + geom_col(aes(x=ar_id,y=N)) + facet_wrap(~array,scales="free_x")
+
+options(scipen = 10^6)
+
+high_gene_arrays <- plot_cast_dt[,.N,by=ar_id][N>0,ar_id]
+
+
+plot_cast_dt[width>500 & ar_id%in%high_gene_arrays] %>% ggplot() + geom_density_2d_filled(aes(x=width,range),contour_var = "ndensity",geom="raster") +
+  facet_wrap(~array) + theme_bw() + scale_fill_discrete_divergingx()  +
+  scale_x_continuous(trans="log10",limits=c(500,100000))
+
+high_gene_arrays <- plot_cast_dt[,.N,by=ar_id][N>71.50,ar_id]
+
+plot_cast_dt[width>500 & ar_id%in%high_gene_arrays] %>% ggplot() + geom_density_2d_filled(aes(x=width,range),contour_var = "ndensity") +
+  facet_wrap(~array) + theme_bw() + scale_fill_discrete_divergingx()  +
+  scale_x_continuous(trans="log10",limits=c(500,100000))
+
+high_gene_arrays <- plot_cast_dt[,.N,by=ar_id][N>132.00,ar_id]
+
+plot_cast_dt[width>500 & ar_id%in%high_gene_arrays] %>% ggplot() + geom_density_2d_filled(aes(x=width,range),contour_var = "ndensity") +
+  facet_wrap(~array) + theme_bw() + scale_fill_discrete_divergingx()  +
+  scale_x_continuous(trans="log10",limits=c(500,100000))
+
+
+
+```
+

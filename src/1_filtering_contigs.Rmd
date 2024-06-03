@@ -1,0 +1,105 @@
+
+```{r}
+library(data.table)
+library(Biostrings)
+library(stringr)
+source("blast_functions.R")
+
+```
+
+
+
+#filtering contigs, based on 1000bp gene content in them, everything else gets discarded
+```{r}
+
+genes_on_tigs <- fread("./scaffolding_results/genes_on_contigs.gff3",fill=TRUE,header=FALSE,skip=3,sep="\t")
+
+genes_on_tigs[,.N,by=V1][N>10]
+
+genes_on_tigs <- genes_on_tigs[V3=="gene",sum(V5-V4),by=V1] 
+
+colnames(genes_on_tigs) <- c("names","length")
+
+
+tigs <- readDNAStringSet("scaffolding_results/ragtag/t_cast_contigs.fasta")
+
+tigs[str_remove(names(tigs)," .*")%in%genes_on_tigs[length>1000,names]] %>% writeXStringSet("./scaffolding_results/filtered_contigs.fasta")
+```
+
+# analyis of mapped contigs
+
+```{r}
+dt <- fread("./scaffolding_results/scafolding_output_1/ragtag.scaffold.confidence.txt")
+names <- dt[,query]
+contigs <- readDNAStringSet("./scaffolding_results/filtered_contigs.fasta")
+contigs[str_remove(names(contigs)," .+")%in%dt[,query]] %>% writeXStringSet("./scaffolding_results/ragtag/included_contigs.fasta")
+all_contigs <- names(contigs)
+
+```
+
+#blasting sattelites on contigs finding sat content on contigs
+
+```{r}
+ dt <- blast_to_raw(q_name = "casts_19.fasta",s_name = "TcasONT.fasta",work_dir = "E:/t_cast_assembly/assembly_analysis/",name="blast_sats_assembly")
+
+dt <- dtl
+
+# dt <- blast_to_gff(q_name = "main_sat.fasta",s_name = "t_cast_contigs.fasta",work_dir = "E:/t_cast_assembly/assembly_analysis/",name="blast_main_sat_assembly")
+
+dt <- fread("E:/t_cast_assembly/assembly_analysis/blast_main_sat_assembly.gff")
+
+dt[V4>V5, c("V5", "V4") := .(V4, V5)]
+
+tig_lengths <- readDNAStringSet("E:/t_cast_assembly/contig_analysis/t_cast_contigs.fasta")
+
+tig_lengths <- data.table(seqnames=str_remove(names(tig_lengths)," .+"),seq_width=width(tig_lengths))
+
+dt <- merge(dt,tig_lengths,by.x="V1",by.y="seqnames")
+
+dt <- dt[V6>400] %>%makeGRangesFromDataFrame(seqnames.field = "V1",start.field = "V4",end.field = "V5") %>%  reduce() %>% as.data.table()
+
+dt <- merge(dt,tig_lengths,all=TRUE)
+
+dt <- dt[,sum(width),by=c("seqnames","seq_width")]
+
+dt[,sat_percentage:=round(V1*100/seq_width,5)]
+
+gene_perc <- fread("./scaffolding_results/ragtag/genes_on_contigs.gff3",skip=3) %>% .[V3=="gene"]
+
+gene_perc[,width:=abs(V5-V4)]
+
+gene_perc <- gene_perc %>% .[,sum(width),by=V1]
+
+colnames(gene_perc) <- c("seqnames","gene_length")
+
+dt <- merge(dt,gene_perc,all=TRUE)
+
+dt[,gene_perc:=gene_length*100/seq_width]
+
+
+dt_2 <- dt
+
+
+dt_2[,in_assembly:="Not in assembly"]
+dt_2[seqnames%in%str_remove(all_contigs," .*"),in_assembly:="Unplaced assembly"]
+dt_2[seqnames%in%names,in_assembly:="Final assembly"]
+
+
+dt_2[is.na(sat_percentage),sat_percentage:=0]
+dt_2[is.na(gene_perc),gene_perc:=0]
+
+dt_2[in_assembly !="Not in assembly" ,c(1,2,4,6,7)] %>% fwrite("./scaffolding_results/ragtag/contig_gene_sat_content_za_evelin.csv")
+
+
+sv_1 <- alignments[,unique(cum_ref),by=refID][order(V1)][,unique(V1)]
+namess <- alignments[,unique(cum_ref),by=refID][,unique(refID)]
+
+
+sv_2 <- alignments[,unique(cum_query),by=queryID][,V1]
+namesq <- alignments[,unique(cum_query),by=queryID][,queryID]
+
+alignments[,unique(cum_ref),by=refID]
+
+dt[order(-sat_percentage)]
+```
+

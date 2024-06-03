@@ -1,0 +1,91 @@
+```{r}
+library(ape)
+library(colorspace)
+library(FactoMineR)
+library(ggplot2)
+library(dplyr)
+library(data.table)
+
+
+```
+
+
+#PCA trees
+
+
+```{r}
+
+names <- c("Cast1","Cast2","Cast2-prime","Cast3","Cast4","Cast5","Cast6","Cast7","Cast8","Cast9")
+
+for (i in names)
+{
+  print(i)
+  
+msa <- readDNAMultipleAlignment(paste0("./data/monomers/",i,".fasta.aligned"),
+                                format="fasta")
+
+print("done reading data")
+x <- dist.dna(as.DNAbin(msa),model="F81",as.matrix=TRUE,pairwise.deletion=TRUE)
+
+
+print("done distance")
+matrix <- as.data.table(x,row.names="V1")
+
+fwrite(matrix,paste0("assembly_analysis/phylogeny/consensus_monomers/",i,".aligned.matrix.csv"))
+pca_res <- PCA(matrix)
+
+print("PCA donte")
+
+
+saveRDS(pca_res, file = paste0("./data/monomers/",i,".aligned.PCA.rds"))
+}
+
+
+
+dt_tot <- data.table() 
+eig_tot <- data.table()
+for (i in names)
+{  
+pca_res <- readRDS(paste0("./data/monomers/",i,".aligned.PCA.rds"))
+
+dt <- pca_res$var$coord %>% as.data.table(keep.rownames = TRUE) 
+
+
+dt[,chr:=str_extract(rn,"LG(\\d+|X)")]
+dt[,name:=i]
+
+
+eigenvalues <- pca_res$eig %>% as.data.table(keep.rownames = TRUE)
+
+eigenvalues <- eigenvalues[1:10]
+
+eigenvalues[,name:=i]
+
+eigenvalues[,val:=1:10]
+
+eig_tot <- rbind(eig_tot,eigenvalues)
+
+
+
+dt_tot <- rbind(dt_tot,dt)
+}
+
+
+qualitative_hcl(10,c=100)
+dt_tot %>% ggplot() + geom_point(aes(x=Dim.1,y=Dim.2,color=chr,fill=chr),alpha=0.8,size=0.1)  +
+  theme_bw() + 
+  scale_color_discrete_qualitative(c1=100) +
+  facet_wrap(~name,scales="free",ncol=5) + 
+  xlab("PC1") +
+   guides(color = guide_legend(override.aes = list(size = 3))) +
+  ylab("PC2") + theme(legend.position = "none")
+
+
+
+eig_tot[,mean(`percentage of variance`),by=c("name","val")] %>%
+  ggplot() + geom_col(aes(x=as.factor(val),y=V1),color="black",fill="#4cb9d2") +
+  xlab("Principal Component") +
+  theme_bw() + facet_wrap(~name)
+```
+
+
