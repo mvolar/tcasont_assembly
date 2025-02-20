@@ -18,3 +18,7 @@ https://www.ebi.ac.uk/ena/browser/api/fasta/GCA_950066185.1?download=true&gzip=t
 
 All scripts are Rmarkdown files and can be run using Rstudio after installing the neccessary libraries.
 
+## LICENSE
+
+https://creativecommons.org/licenses/by-nc/4.0/
+
